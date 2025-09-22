@@ -21,6 +21,28 @@ npm run build
 
 The dev server publishes on `http://127.0.0.1:5173` unless you override the host/port flags. `npm run build` emits a production bundle with sourcemaps.
 
+## Docker Hosting
+
+A multi-stage Dockerfile is available if you prefer to run the viewer behind a container runtime:
+
+```bash
+# Build the image (run once)
+docker build -t teslacam-viewer .
+
+# Start the container and expose it on http://localhost:8080
+docker run --rm -p 8080:80 teslacam-viewer
+```
+
+Once the container is up, open `http://localhost:8080` and use the in-app **Connect Drive** or **Upload Folder** controls to grant the browser access to your TeslaCam footage.
+
+`docker-compose.yml` is included for convenience if you prefer Compose:
+
+```bash
+docker compose up --build
+```
+
+The viewer will be available at `http://localhost:8080` by default. Use `CTRL+C` to stop the stack.
+
 ## Loading Footage
 
 1. **Preferred (Chromium desktop)** – Click **Connect Drive** and grant access to the `TeslaCam` directory when prompted. Brave requires enabling `brave://flags/#file-system-access-api` and allowing File System Access in site settings.
