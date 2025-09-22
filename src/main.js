@@ -54,6 +54,7 @@ const state = {
   selectedEventId: null,
   filter: 'all',
   selectedCameraByEvent: new Map(),
+  selectedSegmentByEvent: new Map(),
   stats: {
     totalEvents: 0,
     totalClips: 0,
@@ -118,7 +119,7 @@ function initDom() {
   main.className = 'app-main';
 
   const summaryPanel = document.createElement('section');
-  summaryPanel.className = 'summary-panel';
+  summaryPanel.className = 'summary-panel liquid-pane';
 
   const summaryItems = [
     ['Total Events', 'totalEvents'],
@@ -257,7 +258,9 @@ async function collectEventsFromDirectory(directoryHandle, category) {
 }
 
 async function parseEventFolderFromHandle(folderHandle, folderName, category) {
-  const cameraSources = new Map();
+  const segments = new Map();
+  const cameraCatalog = [];
+  const seenCameras = new Set();
   let clipCount = 0;
   let metadata = null;
 
@@ -268,8 +271,28 @@ async function parseEventFolderFromHandle(folderHandle, folderName, category) {
     if (lower.endsWith('.mp4')) {
       const cameraKey = detectCameraFromFilename(name);
       const cameraLabel = CAMERA_LABELS[cameraKey] ?? cameraKey ?? 'Unknown';
-      cameraSources.set(cameraLabel, createHandleSource(handle));
+      const segmentKey = deriveSegmentKey(name);
+      const clipTimestamp = parseClipTimestampFromName(name);
+      const segment = ensureSegmentContainer(segments, segmentKey, clipTimestamp);
+
+      if (!segment.clips.has(cameraLabel)) {
+        segment.clips.set(cameraLabel, []);
+        segment.cameraOrder.push(cameraLabel);
+      }
+
+      segment.clips.get(cameraLabel).push({
+        label: cameraLabel,
+        source: createHandleSource(handle),
+        filename: name,
+        timestamp: clipTimestamp
+      });
+      segment.clipCount += 1;
       clipCount += 1;
+
+      if (!seenCameras.has(cameraLabel)) {
+        seenCameras.add(cameraLabel);
+        cameraCatalog.push(cameraLabel);
+      }
       continue;
     }
 
@@ -279,18 +302,32 @@ async function parseEventFolderFromHandle(folderHandle, folderName, category) {
     }
   }
 
-  if (!cameraSources.size) return null;
+  if (!segments.size) return null;
 
-  const timestamp = parseTimestamp(folderName, metadata?.timestamp);
+  const segmentList = Array.from(segments.values()).sort((a, b) => {
+    if (Number.isNaN(a.timestamp) && Number.isNaN(b.timestamp)) return a.id.localeCompare(b.id);
+    if (Number.isNaN(a.timestamp)) return 1;
+    if (Number.isNaN(b.timestamp)) return -1;
+    return a.timestamp - b.timestamp;
+  });
+
+  let timestamp = parseTimestamp(folderName, metadata?.timestamp);
+  if (Number.isNaN(timestamp) && segmentList.length) {
+    const midIndex = Math.floor(segmentList.length / 2);
+    const midSegment = segmentList[midIndex];
+    if (midSegment && !Number.isNaN(midSegment.timestamp)) {
+      timestamp = midSegment.timestamp;
+    }
+  }
 
   return {
     id: `${category}-${folderName}`,
     folderName,
     category,
-    cameraSources,
+    segments: segmentList,
+    cameraCatalog,
     clipCount,
     timestamp,
-    cameraOrder: Array.from(cameraSources.keys()),
     metadata
   };
 }
@@ -316,10 +353,11 @@ async function loadTeslaCamFromFileList(files) {
         id: eventId,
         folderName,
         category,
-        cameraSources: new Map(),
+        segments: new Map(),
+        cameraCatalog: [],
+        seenCameras: new Set(),
         clipCount: 0,
         timestamp: parseTimestamp(folderName),
-        cameraOrder: [],
         metadata: null
       });
     }
@@ -329,9 +367,26 @@ async function loadTeslaCamFromFileList(files) {
       event.clipCount += 1;
       const cameraKey = detectCameraFromFilename(file.name);
       const cameraLabel = CAMERA_LABELS[cameraKey] ?? cameraKey ?? 'Unknown';
-      if (!event.cameraSources.has(cameraLabel)) {
-        event.cameraSources.set(cameraLabel, createFileSource(file));
-        event.cameraOrder.push(cameraLabel);
+      const segmentKey = deriveSegmentKey(file.name);
+      const clipTimestamp = parseClipTimestampFromName(file.name);
+      const segment = ensureSegmentContainer(event.segments, segmentKey, clipTimestamp);
+
+      if (!segment.clips.has(cameraLabel)) {
+        segment.clips.set(cameraLabel, []);
+        segment.cameraOrder.push(cameraLabel);
+      }
+
+      segment.clips.get(cameraLabel).push({
+        label: cameraLabel,
+        source: createFileSource(file),
+        filename: file.name,
+        timestamp: clipTimestamp
+      });
+      segment.clipCount += 1;
+
+      if (!event.seenCameras.has(cameraLabel)) {
+        event.seenCameras.add(cameraLabel);
+        event.cameraCatalog.push(cameraLabel);
       }
     } else if (ext.endsWith('.json')) {
       if (!event.pendingMetadataFiles) {
@@ -363,13 +418,35 @@ async function loadTeslaCamFromFileList(files) {
       }
     }
 
-    if (!event.cameraOrder.length) {
-      event.cameraOrder = Array.from(event.cameraSources.keys());
+    const segmentList = Array.from(event.segments.values()).sort((a, b) => {
+      if (Number.isNaN(a.timestamp) && Number.isNaN(b.timestamp)) return a.id.localeCompare(b.id);
+      if (Number.isNaN(a.timestamp)) return 1;
+      if (Number.isNaN(b.timestamp)) return -1;
+      return a.timestamp - b.timestamp;
+    });
+
+    if (!segmentList.length) {
+      continue;
     }
 
-    if (event.cameraSources.size) {
-      resolvedEvents.push(event);
+    if (Number.isNaN(event.timestamp)) {
+      const midIndex = Math.floor(segmentList.length / 2);
+      const midSegment = segmentList[midIndex];
+      if (midSegment && !Number.isNaN(midSegment.timestamp)) {
+        event.timestamp = midSegment.timestamp;
+      }
     }
+
+    resolvedEvents.push({
+      id: event.id,
+      folderName: event.folderName,
+      category: event.category,
+      segments: segmentList,
+      cameraCatalog: event.cameraCatalog,
+      clipCount: event.clipCount,
+      timestamp: event.timestamp,
+      metadata: event.metadata
+    });
   }
 
   return resolvedEvents.sort((a, b) => b.timestamp - a.timestamp);
@@ -404,6 +481,235 @@ function detectCameraFromFilename(name) {
   if (normalized.includes('rear')) return 'rear';
   if (normalized.includes('back')) return 'back';
   return normalized.replace(/\.mp4$/, '');
+}
+
+function deriveSegmentKey(name) {
+  const match = name.match(/(\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2})/);
+  return match ? match[1] : name.replace(/\.mp4$/, '');
+}
+
+function parseClipTimestampFromName(name) {
+  const match = name.match(/(\d{4}-\d{2}-\d{2})_(\d{2})-(\d{2})-(\d{2})/);
+  if (!match) return Number.NaN;
+  const [_, date, hour, minute, second] = match;
+  return new Date(`${date}T${hour}:${minute}:${second}Z`).valueOf();
+}
+
+function ensureSegmentContainer(collection, key, clipTimestamp) {
+  if (!collection.has(key)) {
+    collection.set(key, {
+      id: key,
+      timestamp: clipTimestamp,
+      clips: new Map(),
+      cameraOrder: [],
+      clipCount: 0
+    });
+  }
+
+  const segment = collection.get(key);
+  if (!Number.isNaN(clipTimestamp)) {
+    if (Number.isNaN(segment.timestamp) || clipTimestamp < segment.timestamp) {
+      segment.timestamp = clipTimestamp;
+    }
+  }
+  return segment;
+}
+
+function ensureSelectedSegment(event) {
+  if (!event?.segments?.length) return null;
+
+  const currentId = state.selectedSegmentByEvent.get(event.id);
+  const existing = event.segments.find((segment) => segment.id === currentId);
+  if (existing) {
+    return existing;
+  }
+
+  const intelligent = chooseIntelligentSegment(event);
+  const fallback = intelligent ?? event.segments[0];
+  state.selectedSegmentByEvent.set(event.id, fallback.id);
+  return fallback;
+}
+
+function chooseIntelligentSegment(event) {
+  if (!event?.segments?.length) return null;
+
+  const anchor = Number.isNaN(event.timestamp) ? null : event.timestamp;
+  let bestSegment = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  if (anchor !== null) {
+    for (const segment of event.segments) {
+      if (Number.isNaN(segment.timestamp)) continue;
+      const diff = Math.abs(segment.timestamp - anchor);
+      if (diff < bestScore) {
+        bestScore = diff;
+        bestSegment = segment;
+      }
+    }
+    if (bestSegment) return bestSegment;
+  }
+
+  if (event.metadata?.primaryCamera) {
+    const primarySegment = event.segments.find((segment) => segment.clips.has(event.metadata.primaryCamera));
+    if (primarySegment) return primarySegment;
+  }
+
+  const frontSegment = event.segments.find((segment) =>
+    segment.cameraOrder.some((label) => label.toLowerCase().includes('front'))
+  );
+  if (frontSegment) return frontSegment;
+
+  return event.segments[Math.floor(event.segments.length / 2)] ?? event.segments[0];
+}
+
+function computeSegmentHighlights(event, limit = 3) {
+  if (!event?.segments?.length) return [];
+  const anchor = Number.isNaN(event.timestamp) ? null : event.timestamp;
+  const totalAngles = event.cameraCatalog.length || 1;
+
+  const scored = event.segments.map((segment) => {
+    const diff = anchor === null || Number.isNaN(segment.timestamp) ? Number.MAX_SAFE_INTEGER : Math.abs(segment.timestamp - anchor);
+    const coverageRatio = segment.cameraOrder.length / totalAngles;
+    const clipBonus = segment.clipCount;
+    const score = diff - coverageRatio * 1000 - clipBonus * 5;
+    return { id: segment.id, score };
+  });
+
+  scored.sort((a, b) => a.score - b.score);
+
+  const highlights = [];
+  for (const item of scored) {
+    if (!highlights.includes(item.id)) {
+      highlights.push(item.id);
+    }
+    if (highlights.length >= limit) break;
+  }
+  return highlights;
+}
+
+function segmentDeltaSeconds(event, segment) {
+  if (!event || !segment) return Number.NaN;
+  if (Number.isNaN(event.timestamp) || Number.isNaN(segment.timestamp)) return Number.NaN;
+  return Math.round((segment.timestamp - event.timestamp) / 1000);
+}
+
+function formatSegmentLabel(event, segment) {
+  const delta = segmentDeltaSeconds(event, segment);
+  if (!Number.isNaN(delta)) {
+    if (delta === 0) return 'Trigger moment';
+    const prefix = delta > 0 ? '+' : '-';
+    return `${prefix}${Math.abs(delta)}s`;
+  }
+
+  if (!Number.isNaN(segment.timestamp)) {
+    return new Date(segment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  return `Segment`;
+}
+
+function formatSegmentDetails(event, segment) {
+  const angles = `${segment.cameraOrder.length} angle${segment.cameraOrder.length === 1 ? '' : 's'}`;
+  const delta = segmentDeltaSeconds(event, segment);
+  if (!Number.isNaN(delta)) {
+    if (delta === 0) {
+      return `Primary clip • ${angles}`;
+    }
+    return `${delta > 0 ? `${delta}s after` : `${Math.abs(delta)}s before`} • ${angles}`;
+  }
+
+  if (!Number.isNaN(segment.timestamp)) {
+    return `${new Date(segment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} • ${angles}`;
+  }
+
+  return angles;
+}
+
+function formatAbsoluteTime(segment) {
+  if (!segment || Number.isNaN(segment.timestamp)) return 'Time unknown';
+  return new Date(segment.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function describeSegmentRelativeTiming(event, segment) {
+  const delta = segmentDeltaSeconds(event, segment);
+  const coverage = `${segment.cameraOrder.length} angle${segment.cameraOrder.length === 1 ? '' : 's'}`;
+  if (Number.isNaN(delta)) {
+    return `Captured at ${formatAbsoluteTime(segment)} • ${coverage}`;
+  }
+  if (delta === 0) {
+    return `Primary trigger moment • ${coverage}`;
+  }
+  if (delta < 0) {
+    return `${Math.abs(delta)}s before trigger • ${coverage}`;
+  }
+  return `${delta}s after trigger • ${coverage}`;
+}
+
+function createSegmentNavigation(event, currentSegment, highlightIds) {
+  const container = document.createElement('div');
+  container.className = 'segment-navigation liquid-pane';
+
+  if (highlightIds.size) {
+    const highlightGroup = document.createElement('div');
+    highlightGroup.className = 'segment-group';
+
+    const heading = document.createElement('h4');
+    heading.textContent = 'Smart highlights';
+    highlightGroup.appendChild(heading);
+
+    const strip = document.createElement('div');
+    strip.className = 'segment-strip';
+
+    event.segments
+      .filter((segment) => highlightIds.has(segment.id))
+      .forEach((segment) => {
+        strip.appendChild(createSegmentChip(event, segment, segment.id === currentSegment.id, true));
+      });
+
+    highlightGroup.appendChild(strip);
+    container.appendChild(highlightGroup);
+  }
+
+  const timelineGroup = document.createElement('div');
+  timelineGroup.className = 'segment-group';
+
+  const timelineHeading = document.createElement('h4');
+  timelineHeading.textContent = 'All clips';
+  timelineGroup.appendChild(timelineHeading);
+
+  const timelineStrip = document.createElement('div');
+  timelineStrip.className = 'segment-strip scrollable';
+
+  event.segments.forEach((segment, index) => {
+    timelineStrip.appendChild(
+      createSegmentChip(event, segment, segment.id === currentSegment.id, highlightIds.has(segment.id), index)
+    );
+  });
+
+  timelineGroup.appendChild(timelineStrip);
+  container.appendChild(timelineGroup);
+
+  return container;
+}
+
+function createSegmentChip(event, segment, isActive, isHighlight, indexOverride) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `segment-chip${isActive ? ' is-active' : ''}${isHighlight ? ' is-highlight' : ''}`;
+  button.dataset.segmentId = segment.id;
+
+  const label = document.createElement('span');
+  label.className = 'segment-chip-label';
+  label.textContent = formatSegmentLabel(event, segment);
+
+  const detail = document.createElement('span');
+  detail.className = 'segment-chip-detail';
+  const detailText = formatSegmentDetails(event, segment);
+  const ordinal = typeof indexOverride === 'number' ? `Clip ${indexOverride + 1}` : null;
+  detail.textContent = ordinal ? `${ordinal} • ${detailText}` : detailText;
+
+  button.append(label, detail);
+  return button;
 }
 
 async function parseMetadataFromText(text, fallback) {
@@ -477,6 +783,11 @@ function updateStateWithEvents(events) {
       state.selectedCameraByEvent.delete(id);
     }
   }
+  for (const id of Array.from(state.selectedSegmentByEvent.keys())) {
+    if (!validIds.has(id)) {
+      state.selectedSegmentByEvent.delete(id);
+    }
+  }
 
   applyFilter(state.filter);
   renderSummary();
@@ -536,7 +847,7 @@ function renderEventList() {
   const fragment = document.createDocumentFragment();
   state.filteredEvents.forEach((event) => {
     const card = document.createElement('article');
-    card.className = `event-card${event.id === state.selectedEventId ? ' active' : ''}`;
+    card.className = `event-card liquid-pane${event.id === state.selectedEventId ? ' active' : ''}`;
     card.dataset.id = event.id;
 
     const title = document.createElement('div');
@@ -547,13 +858,16 @@ function renderEventList() {
     metaTop.className = 'event-meta';
 
     const cameraCount = document.createElement('span');
-    cameraCount.textContent = `${event.cameraSources.size} camera${event.cameraSources.size === 1 ? '' : 's'}`;
+    cameraCount.textContent = `${event.cameraCatalog.length} angle${event.cameraCatalog.length === 1 ? '' : 's'}`;
+
+    const segmentCount = document.createElement('span');
+    segmentCount.textContent = `${event.segments.length} segment${event.segments.length === 1 ? '' : 's'}`;
 
     const clipType = document.createElement('span');
     clipType.className = 'event-type';
     clipType.textContent = prettyTypeLabel(event.category);
 
-    metaTop.append(cameraCount, clipType);
+    metaTop.append(cameraCount, segmentCount, clipType);
 
     const metaBottom = document.createElement('div');
     metaBottom.className = 'event-meta-secondary';
@@ -612,26 +926,60 @@ async function renderViewer() {
     return;
   }
 
-  ensureSelectedCamera(selected);
+  const currentSegment = ensureSelectedSegment(selected);
+  if (!currentSegment) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'No playable segments found for this event.';
+    viewer.appendChild(empty);
+    return;
+  }
+
+  const highlightIds = new Set(computeSegmentHighlights(selected));
+  let segmentIndex = selected.segments.findIndex((segment) => segment.id === currentSegment.id);
+  if (segmentIndex === -1) segmentIndex = 0;
+
+  const cameraEntries = await loadCameraEntries(selected, currentSegment);
+  if (!cameraEntries.length) {
+    const empty = document.createElement('div');
+    empty.className = 'empty-state';
+    empty.textContent = 'Unable to load videos for this segment.';
+    viewer.appendChild(empty);
+    return;
+  }
+
+  const activeLabel = ensureSelectedCamera(selected, currentSegment);
+  const activeEntry = cameraEntries.find((entry) => entry.label === activeLabel) ?? cameraEntries[0];
+  state.selectedCameraByEvent.set(selected.id, activeEntry.label);
 
   const header = document.createElement('div');
-  header.className = 'viewer-header';
+  header.className = 'viewer-header liquid-pane';
+
+  const headingBlock = document.createElement('div');
+  headingBlock.className = 'viewer-heading';
 
   const title = document.createElement('h2');
   title.className = 'viewer-title';
   title.textContent = formatEventTitle(selected);
 
-  const type = document.createElement('span');
-  type.className = 'event-type';
-  type.textContent = prettyTypeLabel(selected.category);
+  const subtitle = document.createElement('span');
+  subtitle.className = 'viewer-subtitle';
+  subtitle.textContent = `${prettyTypeLabel(selected.category)} • Segment ${segmentIndex + 1} of ${selected.segments.length}`;
 
-  const info = document.createElement('span');
-  info.textContent = `${selected.cameraSources.size} camera feeds, ${selected.clipCount} files`;
+  headingBlock.append(title, subtitle);
 
-  header.append(title, type, info);
+  const info = document.createElement('div');
+  info.className = 'viewer-stats';
+  info.textContent = `${selected.cameraCatalog.length} angle${selected.cameraCatalog.length === 1 ? '' : 's'} • ${selected.clipCount} file${selected.clipCount === 1 ? '' : 's'} • ${selected.segments.length} segment${selected.segments.length === 1 ? '' : 's'}`;
+
+  header.append(headingBlock, info);
 
   const meta = document.createElement('div');
-  meta.className = 'viewer-meta';
+  meta.className = 'viewer-meta liquid-pane';
+
+  const segmentDescriptor = document.createElement('span');
+  segmentDescriptor.textContent = describeSegmentRelativeTiming(selected, currentSegment);
+  meta.appendChild(segmentDescriptor);
 
   if (selected.metadata?.reason) {
     const reason = document.createElement('span');
@@ -654,24 +1002,22 @@ async function renderViewer() {
     meta.appendChild(link);
   }
 
-  const cameraEntries = await loadCameraEntries(selected);
-  if (!cameraEntries.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.textContent = 'Unable to load videos for this event.';
-    viewer.append(header, meta, empty);
-    return;
-  }
-
-  const activeLabel = state.selectedCameraByEvent.get(selected.id) ?? cameraEntries[0].label;
-  const activeEntry = cameraEntries.find((entry) => entry.label === activeLabel) ?? cameraEntries[0];
-  state.selectedCameraByEvent.set(selected.id, activeEntry.label);
+  const segmentNav = createSegmentNavigation(selected, currentSegment, highlightIds);
 
   const primaryView = document.createElement('div');
-  primaryView.className = 'primary-view';
+  primaryView.className = 'primary-view liquid-pane';
 
-  const primaryHeading = document.createElement('h3');
-  primaryHeading.textContent = activeEntry.label;
+  const primaryHeading = document.createElement('div');
+  primaryHeading.className = 'primary-heading';
+
+  const cameraTitle = document.createElement('h3');
+  cameraTitle.textContent = activeEntry.label;
+
+  const cameraSubheading = document.createElement('span');
+  cameraSubheading.className = 'camera-subheading';
+  cameraSubheading.textContent = formatAbsoluteTime(currentSegment);
+
+  primaryHeading.append(cameraTitle, cameraSubheading);
 
   const primaryVideo = document.createElement('video');
   primaryVideo.controls = true;
@@ -683,13 +1029,16 @@ async function renderViewer() {
   primaryView.append(primaryHeading, primaryVideo);
 
   const thumbnailStrip = document.createElement('div');
-  thumbnailStrip.className = 'thumbnail-strip';
+  thumbnailStrip.className = 'thumbnail-strip liquid-pane';
 
   cameraEntries.forEach((entry) => {
     const thumbButton = document.createElement('button');
     thumbButton.className = `thumbnail-button${entry.label === activeEntry.label ? ' active' : ''}`;
     thumbButton.type = 'button';
     thumbButton.dataset.label = entry.label;
+
+    const thumbOverlay = document.createElement('div');
+    thumbOverlay.className = 'thumbnail-overlay';
 
     const thumbVideo = document.createElement('video');
     thumbVideo.preload = 'metadata';
@@ -700,7 +1049,8 @@ async function renderViewer() {
     const thumbLabel = document.createElement('span');
     thumbLabel.textContent = entry.label;
 
-    thumbButton.append(thumbVideo, thumbLabel);
+    thumbOverlay.append(thumbVideo, thumbLabel);
+    thumbButton.appendChild(thumbOverlay);
     thumbnailStrip.appendChild(thumbButton);
   });
 
@@ -708,7 +1058,16 @@ async function renderViewer() {
   if (meta.childElementCount) {
     viewer.appendChild(meta);
   }
-  viewer.append(primaryView, thumbnailStrip);
+  viewer.append(segmentNav, primaryView, thumbnailStrip);
+
+  segmentNav.addEventListener('click', (event) => {
+    const button = event.target.closest('[data-segment-id]');
+    if (!button) return;
+    const { segmentId } = button.dataset;
+    if (!segmentId || segmentId === state.selectedSegmentByEvent.get(selected.id)) return;
+    state.selectedSegmentByEvent.set(selected.id, segmentId);
+    void renderViewer();
+  });
 
   thumbnailStrip.addEventListener('click', (event) => {
     const button = event.target.closest('.thumbnail-button');
@@ -720,37 +1079,54 @@ async function renderViewer() {
   });
 }
 
-function ensureSelectedCamera(event) {
-  if (state.selectedCameraByEvent.has(event.id)) return;
-
-  if (event.metadata?.primaryCamera && event.cameraSources.has(event.metadata.primaryCamera)) {
-    state.selectedCameraByEvent.set(event.id, event.metadata.primaryCamera);
-    return;
+function ensureSelectedCamera(event, segment) {
+  const current = state.selectedCameraByEvent.get(event.id);
+  if (current && segment.clips.has(current)) {
+    return current;
   }
 
-  const frontCamera = event.cameraOrder.find((label) => label.toLowerCase().includes('front'));
+  if (event.metadata?.primaryCamera && segment.clips.has(event.metadata.primaryCamera)) {
+    state.selectedCameraByEvent.set(event.id, event.metadata.primaryCamera);
+    return event.metadata.primaryCamera;
+  }
+
+  const frontCamera = segment.cameraOrder.find((label) => label.toLowerCase().includes('front'));
   if (frontCamera) {
     state.selectedCameraByEvent.set(event.id, frontCamera);
-    return;
+    return frontCamera;
   }
 
-  const firstCamera = event.cameraOrder[0];
+  const firstCamera = segment.cameraOrder[0];
   if (firstCamera) {
     state.selectedCameraByEvent.set(event.id, firstCamera);
+    return firstCamera;
   }
+
+  if (current && event.cameraCatalog.includes(current)) {
+    return current;
+  }
+
+  const fallback = event.cameraCatalog[0];
+  if (fallback) {
+    state.selectedCameraByEvent.set(event.id, fallback);
+    return fallback;
+  }
+
+  return null;
 }
 
-async function loadCameraEntries(event) {
+async function loadCameraEntries(event, segment) {
   const entries = [];
 
-  for (const label of event.cameraOrder) {
-    const source = event.cameraSources.get(label);
-    if (!source) continue;
+  for (const label of segment.cameraOrder) {
+    const clipOptions = segment.clips.get(label);
+    if (!clipOptions?.length) continue;
+    const primaryClip = clipOptions[0];
     try {
-      const file = await source.getFile();
+      const file = await primaryClip.source.getFile();
       const url = URL.createObjectURL(file);
       activeObjectUrls.add(url);
-      entries.push({ label, url });
+      entries.push({ label, url, timestamp: primaryClip.timestamp });
     } catch (error) {
       console.error(`Failed to load video for ${label}`, error);
     }
@@ -818,7 +1194,8 @@ function setStatus(message, tone = 'info') {
 function registerServiceWorker() {
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
-      navigator.serviceWorker.register('/sw.js').catch((error) => {
+      const swUrl = new URL('./sw.js', window.location.href);
+      navigator.serviceWorker.register(swUrl.href).catch((error) => {
         console.warn('Service worker registration failed:', error);
       });
     });

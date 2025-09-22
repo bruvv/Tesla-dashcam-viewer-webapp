@@ -51,6 +51,10 @@ docker compose up --build
 
 The viewer will be available at `http://localhost:8080` by default. Use `CTRL+C` to stop the stack.
 
+## Smart Clip Navigation
+
+Every event retains all of its TeslaCam video files per camera. The viewer clusters them into chronological segments, ranks the most relevant moments as **Smart highlights**, and exposes the full timeline as liquid glass chips. This makes it easy to step through large events (e.g. 44 files from an extended Sentry trigger) without overwhelming the layout.
+
 ## Loading Footage
 
 1. **Preferred (Chromium desktop)** – Click **Connect Drive** and grant access to the `TeslaCam` directory when prompted. Brave requires enabling `brave://flags/#file-system-access-api` and allowing File System Access in site settings.
@@ -60,8 +64,9 @@ The app recognises the standard `TeslaCam/{RecentClips,SavedClips,SentryClips}/<
 
 ## Viewer Features
 
+- Smart highlights and timeline chips to scrub every captured segment per event while surfacing the most relevant clips first.
 - Event filters for Recent, Saved, and Sentry clips with summary counters.
-- Tesla-style layout: a large primary video pane with a selectable thumbnail rail for the other cameras.
+- Liquid Glass-inspired layout: a large primary video pane with a reflective multi-camera rail styled after the latest Apple design language.
 - Automatic camera selection from metadata (camera index) with manual overrides per event.
 - Reason descriptions for known Sentry and manual triggers, plus city readouts when available.
 - Installable PWA with offline caching of the UI shell.
