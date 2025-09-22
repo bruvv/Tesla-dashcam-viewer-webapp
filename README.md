@@ -1,6 +1,8 @@
 # TeslaCam Viewer
 
-TeslaCam Viewer is a progressive web app for exploring Tesla dashcam and Sentry footage directly from the USB drive. It groups recordings by event, surfaces metadata such as trigger reason and location, and provides a Tesla-style multi-camera player with a primary spotlight view.
+TeslaCam Viewer is a progressive web app for exploring Tesla dashcam and Sentry footage directly from the USB drive. It groups recordings by event, surfaces metadata such as trigger reason and location, and provides a Tesla-style multi-camera player with a primary spotlight view. What better then having a screenshot?
+<img width="1720" height="949" alt="image" src="https://github.com/user-attachments/assets/151bf4e3-1b7f-4ac0-b7cb-f4a850e71981" />
+
 
 ## Project Layout
 
