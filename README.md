@@ -23,6 +23,10 @@ npm run build
 
 The dev server publishes on `http://127.0.0.1:5173` unless you override the host/port flags. `npm run build` emits a production bundle with sourcemaps.
 
+## Continuous Deployment
+
+Pushes to `main` automatically run the GitHub Actions workflow in `.github/workflows/deploy.yml`. It installs dependencies with Node.js 20, builds the Vite bundle, and publishes the `dist` output to GitHub Pages. You can trigger a manual deployment with the **Run workflow** button if needed.
+
 ## Docker Hosting
 
 A multi-stage Dockerfile is available if you prefer to run the viewer behind a container runtime:
