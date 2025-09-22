@@ -1,5 +1,6 @@
 const CACHE_NAME = 'teslacam-viewer-v1';
-const CORE_ASSETS = ['/', '/index.html', '/manifest.webmanifest'];
+const BASE_PATH = new URL(self.registration.scope).pathname;
+const CORE_ASSETS = [BASE_PATH, `${BASE_PATH}index.html`, `${BASE_PATH}manifest.webmanifest`];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -38,7 +39,7 @@ self.addEventListener('fetch', (event) => {
           caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
           return response;
         })
-        .catch(() => caches.match('/index.html'));
+        .catch(() => caches.match(`${BASE_PATH}index.html`));
     })
   );
 });

@@ -27,6 +27,8 @@ The dev server publishes on `http://127.0.0.1:5173` unless you override the host
 
 Pushes to `main` automatically run the GitHub Actions workflow in `.github/workflows/deploy.yml`. It installs dependencies with Node.js 20, builds the Vite bundle, and publishes the `dist` output to GitHub Pages. You can trigger a manual deployment with the **Run workflow** button if needed.
 
+The Vite config sets the correct base path automatically when the build runs in GitHub Actions. If you publish the site under a different path, set the `VITE_BASE_PATH` environment variable before building (for example, `VITE_BASE_PATH=/my-custom-prefix/`).
+
 ## Docker Hosting
 
 A multi-stage Dockerfile is available if you prefer to run the viewer behind a container runtime:
