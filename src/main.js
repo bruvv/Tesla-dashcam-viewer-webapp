@@ -53,6 +53,7 @@ const state = {
   filteredEvents: [],
   selectedEventId: null,
   filter: 'all',
+  dragActive: false,
   selectedCameraByEvent: new Map(),
   selectedSegmentByEvent: new Map(),
   stats: {
@@ -65,6 +66,7 @@ const state = {
 };
 
 const elements = {
+  appShell: null,
   summary: {},
   eventList: null,
   viewer: null,
@@ -72,22 +74,50 @@ const elements = {
   connectButton: null,
   manualButton: null,
   folderInput: null,
+  dragOverlay: null,
   statusMessage: null
 };
 
 const activeObjectUrls = new Set();
+let dragDepth = 0;
 
 function initDom() {
   const app = document.getElementById('app');
 
   const shell = document.createElement('div');
   shell.className = 'app-shell';
+  elements.appShell = shell;
 
   const header = document.createElement('header');
-  header.className = 'app-header';
+  header.className = 'app-header liquid-pane';
+
+  const brand = document.createElement('div');
+  brand.className = 'app-brand';
+
+  const eyebrow = document.createElement('span');
+  eyebrow.className = 'app-eyebrow';
+  eyebrow.textContent = 'Dashcam cockpit';
 
   const title = document.createElement('h1');
   title.textContent = 'TeslaCam Viewer';
+
+  const systemPill = document.createElement('span');
+  systemPill.className = 'system-pill';
+  systemPill.textContent = SUPPORTS_FILE_SYSTEM_ACCESS ? 'Direct USB access ready' : 'Upload mode enabled';
+
+  const brandRow = document.createElement('div');
+  brandRow.className = 'brand-row';
+  brandRow.append(title, systemPill);
+
+  const subtitle = document.createElement('p');
+  subtitle.className = 'app-subtitle';
+  subtitle.textContent =
+    'Review Recent, Saved, and Sentry footage from the TeslaCam drive with a calmer, more native-feeling multi-camera viewer.';
+
+  brand.append(eyebrow, brandRow, subtitle);
+
+  const actionBlock = document.createElement('div');
+  actionBlock.className = 'header-action-block';
 
   const controlGroup = document.createElement('div');
   controlGroup.className = 'header-controls';
@@ -95,7 +125,7 @@ function initDom() {
   const connectButton = document.createElement('button');
   connectButton.className = 'primary-button';
   connectButton.type = 'button';
-  connectButton.textContent = SUPPORTS_FILE_SYSTEM_ACCESS ? 'Connect Drive' : 'Filesystem API Unavailable';
+  connectButton.textContent = SUPPORTS_FILE_SYSTEM_ACCESS ? 'Connect TeslaCam' : 'USB Access Unavailable';
   connectButton.disabled = !SUPPORTS_FILE_SYSTEM_ACCESS;
 
   const manualButton = document.createElement('button');
@@ -111,15 +141,44 @@ function initDom() {
   folderInput.setAttribute('webkitdirectory', '');
   folderInput.setAttribute('directory', '');
 
-  controlGroup.append(connectButton, manualButton, folderInput);
+  const actionNote = document.createElement('p');
+  actionNote.className = 'header-note';
+  actionNote.textContent = SUPPORTS_FILE_SYSTEM_ACCESS
+    ? 'Best experience on desktop Chromium. You can also drop a TeslaCam folder anywhere on the page.'
+    : 'Direct USB browsing is unavailable in this browser, but folder upload and drag-and-drop still work.';
 
-  header.append(title, controlGroup);
+  controlGroup.append(connectButton, manualButton, folderInput);
+  actionBlock.append(controlGroup, actionNote);
+
+  header.append(brand, actionBlock);
 
   const main = document.createElement('main');
   main.className = 'app-main';
 
   const summaryPanel = document.createElement('section');
   summaryPanel.className = 'summary-panel liquid-pane';
+
+  const summaryIntro = document.createElement('div');
+  summaryIntro.className = 'summary-intro';
+
+  const summaryEyebrow = document.createElement('span');
+  summaryEyebrow.className = 'section-eyebrow';
+  summaryEyebrow.textContent = 'Fleet overview';
+
+  const summaryHeadline = document.createElement('h2');
+  summaryHeadline.className = 'section-title';
+  summaryHeadline.textContent = 'Recent footage at a glance';
+
+  const summaryCopy = document.createElement('p');
+  summaryCopy.className = 'section-copy';
+  summaryCopy.textContent =
+    'Keep the latest Recent, Saved, and Sentry sessions visible while you decide which event deserves the full multi-camera review.';
+
+  summaryIntro.append(summaryEyebrow, summaryHeadline, summaryCopy);
+  summaryPanel.appendChild(summaryIntro);
+
+  const summaryGrid = document.createElement('div');
+  summaryGrid.className = 'summary-grid';
 
   const summaryItems = [
     ['Total Events', 'totalEvents'],
@@ -142,22 +201,53 @@ function initDom() {
     valueEl.textContent = '0';
 
     tile.append(labelEl, valueEl);
-    summaryPanel.appendChild(tile);
+    summaryGrid.appendChild(tile);
     elements.summary[key] = valueEl;
   });
+  summaryPanel.appendChild(summaryGrid);
 
   const layoutGrid = document.createElement('section');
   layoutGrid.className = 'layout-grid';
 
   const listContainer = document.createElement('div');
+  listContainer.className = 'sidebar-panel liquid-pane';
+
+  const listHeader = document.createElement('div');
+  listHeader.className = 'panel-header';
+
+  const listEyebrow = document.createElement('span');
+  listEyebrow.className = 'section-eyebrow';
+  listEyebrow.textContent = 'Event queue';
+
+  const listTitle = document.createElement('h2');
+  listTitle.className = 'section-title';
+  listTitle.textContent = 'Recorded events';
+
+  const listCopy = document.createElement('p');
+  listCopy.className = 'section-copy';
+  listCopy.textContent =
+    'Jump between saved incidents, recent clips, and sentry alerts without losing the selected camera or trigger moment.';
+
+  listHeader.append(listEyebrow, listTitle, listCopy);
 
   const filters = document.createElement('div');
   filters.className = 'filters';
   CLIP_TYPES.forEach(({ id, label }) => {
     const filterButton = document.createElement('button');
     filterButton.className = `filter-button${id === state.filter ? ' active' : ''}`;
+    filterButton.type = 'button';
     filterButton.dataset.filter = id;
-    filterButton.textContent = label;
+    filterButton.dataset.label = label;
+
+    const text = document.createElement('span');
+    text.className = 'filter-label';
+    text.textContent = label;
+
+    const count = document.createElement('span');
+    count.className = 'filter-count';
+    count.textContent = '0';
+
+    filterButton.append(text, count);
     filters.appendChild(filterButton);
   });
   elements.filters = filters;
@@ -166,15 +256,40 @@ function initDom() {
   eventList.className = 'event-list';
   elements.eventList = eventList;
 
-  listContainer.append(filters, eventList);
+  listContainer.append(listHeader, filters, eventList);
 
   const viewer = document.createElement('section');
-  viewer.className = 'viewer-panel';
+  viewer.className = 'viewer-panel liquid-pane';
   elements.viewer = viewer;
+
+  const dragOverlay = document.createElement('div');
+  dragOverlay.className = 'drag-overlay';
+  dragOverlay.hidden = true;
+  dragOverlay.setAttribute('aria-hidden', 'true');
+
+  const dragPanel = document.createElement('div');
+  dragPanel.className = 'drag-overlay-panel liquid-pane';
+
+  const dragKicker = document.createElement('span');
+  dragKicker.className = 'section-eyebrow';
+  dragKicker.textContent = 'Quick import';
+
+  const dragTitle = document.createElement('h2');
+  dragTitle.className = 'drag-title';
+  dragTitle.textContent = 'Drop your TeslaCam folder to load footage';
+
+  const dragBody = document.createElement('p');
+  dragBody.className = 'drag-copy';
+  dragBody.textContent =
+    'Folders, MP4 clips, and event metadata files are accepted. The viewer will group them into Recent, Saved, and Sentry events automatically.';
+
+  dragPanel.append(dragKicker, dragTitle, dragBody);
+  dragOverlay.appendChild(dragPanel);
+  elements.dragOverlay = dragOverlay;
 
   layoutGrid.append(listContainer, viewer);
   main.append(summaryPanel, layoutGrid);
-  shell.append(header, main);
+  shell.append(header, main, dragOverlay);
   app.appendChild(shell);
 
   elements.connectButton = connectButton;
@@ -188,12 +303,12 @@ async function handleConnectClick() {
 
     const rootHandle = await window.showDirectoryPicker();
     const events = await loadTeslaCamFromDirectoryHandle(rootHandle);
-
+    updateStateWithEvents(events);
     if (!events.length) {
       setStatus('No TeslaCam clips detected in the selected directory.', 'warn');
+      return;
     }
-
-    updateStateWithEvents(events);
+    setStatus(summarizeImportedFootage(events, 'Connected to TeslaCam drive.'), 'info');
   } catch (error) {
     if (error.name === 'AbortError') {
       setStatus('Directory selection cancelled.', 'info');
@@ -209,13 +324,24 @@ async function handleFolderUpload(event) {
   event.target.value = '';
   if (!files.length) return;
 
-  clearStatus();
-
-  const events = await loadTeslaCamFromFileList(files);
-  if (!events.length) {
-    setStatus('No TeslaCam clips detected in the uploaded folder.', 'warn');
+  try {
+    clearStatus();
+    await importEntries(
+      normalizeFileEntries(files),
+      'No TeslaCam clips detected in the uploaded folder.',
+      'Imported from folder upload.'
+    );
+  } catch (error) {
+    console.error(error);
+    setStatus('Unable to import the selected folder. Check console for details.', 'error');
   }
-  updateStateWithEvents(events);
+}
+
+function normalizeFileEntries(files) {
+  return files.map((file) => ({
+    file,
+    relativePath: file.webkitRelativePath || file.name
+  }));
 }
 
 async function loadTeslaCamFromDirectoryHandle(rootHandle) {
@@ -332,12 +458,11 @@ async function parseEventFolderFromHandle(folderHandle, folderName, category) {
   };
 }
 
-async function loadTeslaCamFromFileList(files) {
+async function loadTeslaCamFromEntries(entries) {
   const events = new Map();
   const categories = new Set(['RecentClips', 'SavedClips', 'SentryClips']);
 
-  files.forEach((file) => {
-    const relativePath = file.webkitRelativePath || file.name;
+  entries.forEach(({ file, relativePath }) => {
     const parts = relativePath.split(/[/\\]/).filter(Boolean);
     if (!parts.length) return;
     const categoryIndex = parts.findIndex((part) => categories.has(part));
@@ -769,6 +894,78 @@ function parseTimestamp(folderName, metadataTimestamp) {
   return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`).valueOf();
 }
 
+function summarizeImportedFootage(events, suffix = '') {
+  const eventCount = events.length;
+  const clipCount = events.reduce((total, event) => total + event.clipCount, 0);
+  const summary = `Loaded ${eventCount} event${eventCount === 1 ? '' : 's'} and ${clipCount} video file${clipCount === 1 ? '' : 's'}.`;
+  return suffix ? `${summary} ${suffix}` : summary;
+}
+
+function createRichEmptyState({ kicker, title, body, cards = [], footnote = '', compact = false }) {
+  const empty = document.createElement('section');
+  empty.className = `empty-state${compact ? ' empty-state-compact' : ''}`;
+
+  const shell = document.createElement('div');
+  shell.className = 'empty-shell';
+
+  if (kicker) {
+    const kickerEl = document.createElement('span');
+    kickerEl.className = 'empty-kicker';
+    kickerEl.textContent = kicker;
+    shell.appendChild(kickerEl);
+  }
+
+  const titleEl = document.createElement('h3');
+  titleEl.className = 'empty-title';
+  titleEl.textContent = title;
+  shell.appendChild(titleEl);
+
+  const bodyEl = document.createElement('p');
+  bodyEl.className = 'empty-copy';
+  bodyEl.textContent = body;
+  shell.appendChild(bodyEl);
+
+  if (cards.length) {
+    const grid = document.createElement('div');
+    grid.className = 'empty-grid';
+
+    cards.forEach((card) => {
+      const cardEl = document.createElement('article');
+      cardEl.className = 'empty-card';
+
+      if (card.label) {
+        const label = document.createElement('span');
+        label.className = 'empty-card-label';
+        label.textContent = card.label;
+        cardEl.appendChild(label);
+      }
+
+      const heading = document.createElement('h4');
+      heading.className = 'empty-card-title';
+      heading.textContent = card.title;
+
+      const copy = document.createElement('p');
+      copy.className = 'empty-card-copy';
+      copy.textContent = card.body;
+
+      cardEl.append(heading, copy);
+      grid.appendChild(cardEl);
+    });
+
+    shell.appendChild(grid);
+  }
+
+  if (footnote) {
+    const footnoteEl = document.createElement('p');
+    footnoteEl.className = 'empty-footnote';
+    footnoteEl.textContent = footnote;
+    shell.appendChild(footnoteEl);
+  }
+
+  empty.appendChild(shell);
+  return empty;
+}
+
 function updateStateWithEvents(events) {
   state.events = events;
   state.stats.totalEvents = events.length;
@@ -826,8 +1023,20 @@ function renderSummary() {
 function renderFilters() {
   if (!elements.filters) return;
 
+  const countByFilter = {
+    all: state.events.length,
+    RecentClips: state.stats.RecentClips,
+    SavedClips: state.stats.SavedClips,
+    SentryClips: state.stats.SentryClips
+  };
+
   for (const button of elements.filters.querySelectorAll('.filter-button')) {
     button.classList.toggle('active', button.dataset.filter === state.filter);
+
+    const count = button.querySelector('.filter-count');
+    if (count) {
+      count.textContent = `${countByFilter[button.dataset.filter] ?? 0}`;
+    }
   }
 }
 
@@ -837,10 +1046,46 @@ function renderEventList() {
   list.innerHTML = '';
 
   if (!state.filteredEvents.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.textContent = 'No clips available in this view yet. Connect your TeslaCam drive or upload a folder to populate the list.';
-    list.appendChild(empty);
+    if (state.events.length) {
+      list.appendChild(
+        createRichEmptyState({
+          kicker: 'Filtered view',
+          title: `No ${prettyTypeLabel(state.filter).toLowerCase()} events in this queue`,
+          body: 'Switch to another filter or import more TeslaCam footage to repopulate this lane.',
+          compact: true,
+          cards: [
+            {
+              label: 'Tip',
+              title: 'Try All Clips',
+              body: 'The full queue keeps every Recent, Saved, and Sentry event visible when a narrower filter comes up empty.'
+            }
+          ]
+        })
+      );
+      return;
+    }
+
+    list.appendChild(
+      createRichEmptyState({
+        kicker: 'Ready to import',
+        title: 'No TeslaCam footage loaded yet',
+        body: 'Connect the drive, upload the TeslaCam folder, or drag footage onto the page to populate the event queue.',
+        compact: true,
+        cards: [
+          {
+            label: '1',
+            title: 'Connect directly',
+            body: 'On Chromium desktop you can grant the viewer direct access to the TeslaCam USB drive for the fastest import.'
+          },
+          {
+            label: '2',
+            title: 'Upload a folder',
+            body: 'The upload flow accepts the standard TeslaCam directory with RecentClips, SavedClips, and SentryClips.'
+          }
+        ],
+        footnote: 'Drag-and-drop also works for folders, MP4 clips, and matching event metadata files.'
+      })
+    );
     return;
   }
 
@@ -849,6 +1094,7 @@ function renderEventList() {
     const card = document.createElement('article');
     card.className = `event-card liquid-pane${event.id === state.selectedEventId ? ' active' : ''}`;
     card.dataset.id = event.id;
+    card.tabIndex = 0;
 
     const title = document.createElement('div');
     title.className = 'event-title';
@@ -919,19 +1165,67 @@ async function renderViewer() {
 
   const selected = state.events.find((event) => event.id === state.selectedEventId);
   if (!selected) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.textContent = 'Select a clip to start playback. Multi-camera footage will appear here.';
-    viewer.appendChild(empty);
+    if (state.events.length) {
+      viewer.appendChild(
+        createRichEmptyState({
+          kicker: 'Viewer standby',
+          title: 'Choose an event to enter playback',
+          body: 'The selected event becomes the primary cockpit view with trigger-aware clip navigation and camera switching.',
+          cards: [
+            {
+              label: 'Timeline',
+              title: 'Trigger-aware segments',
+              body: 'Smart highlights surface the most relevant moment first, then keep the full timeline one tap away.'
+            },
+            {
+              label: 'Cameras',
+              title: 'Front-first angle selection',
+              body: 'The viewer favors the front camera automatically but lets you jump between every available angle instantly.'
+            }
+          ]
+        })
+      );
+      return;
+    }
+
+    viewer.appendChild(
+      createRichEmptyState({
+        kicker: 'Tesla-style playback',
+        title: 'Bring the TeslaCam drive online',
+        body: 'Once footage is loaded, this area becomes a quieter review surface with event metadata, smart highlights, and synchronized camera switching.',
+        cards: [
+          {
+            label: 'Direct access',
+            title: 'Plug in the USB drive',
+            body: 'Use Connect TeslaCam on Chromium desktop to browse the live TeslaCam directory without exporting clips first.'
+          },
+          {
+            label: 'Folder import',
+            title: 'Upload from Finder',
+            body: 'Choose the TeslaCam folder if you prefer the fallback flow or if the browser blocks the File System Access API.'
+          },
+          {
+            label: 'Drag and drop',
+            title: 'Drop footage anywhere',
+            body: 'Folders, MP4 files, and event metadata can be dropped onto the page and will be grouped into events automatically.'
+          }
+        ],
+        footnote: 'The viewer understands RecentClips, SavedClips, SentryClips, MP4 footage, and optional event.json metadata.'
+      })
+    );
     return;
   }
 
   const currentSegment = ensureSelectedSegment(selected);
   if (!currentSegment) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.textContent = 'No playable segments found for this event.';
-    viewer.appendChild(empty);
+    viewer.appendChild(
+      createRichEmptyState({
+        kicker: 'Playback unavailable',
+        title: 'No playable segments were found for this event',
+        body: 'The event loaded into the queue, but none of its files could be turned into a camera segment for playback.',
+        compact: true
+      })
+    );
     return;
   }
 
@@ -941,10 +1235,14 @@ async function renderViewer() {
 
   const cameraEntries = await loadCameraEntries(selected, currentSegment);
   if (!cameraEntries.length) {
-    const empty = document.createElement('div');
-    empty.className = 'empty-state';
-    empty.textContent = 'Unable to load videos for this segment.';
-    viewer.appendChild(empty);
+    viewer.appendChild(
+      createRichEmptyState({
+        kicker: 'Playback unavailable',
+        title: 'Unable to load videos for this segment',
+        body: 'The footage exists in the event, but the browser could not create playable video sources for the selected moment.',
+        compact: true
+      })
+    );
     return;
   }
 
@@ -978,23 +1276,27 @@ async function renderViewer() {
   meta.className = 'viewer-meta liquid-pane';
 
   const segmentDescriptor = document.createElement('span');
+  segmentDescriptor.className = 'meta-pill';
   segmentDescriptor.textContent = describeSegmentRelativeTiming(selected, currentSegment);
   meta.appendChild(segmentDescriptor);
 
   if (selected.metadata?.reason) {
     const reason = document.createElement('span');
+    reason.className = 'meta-pill';
     reason.textContent = formatReason(selected.metadata.reason);
     meta.appendChild(reason);
   }
 
   if (selected.metadata?.city) {
     const city = document.createElement('span');
+    city.className = 'meta-pill';
     city.textContent = selected.metadata.city;
     meta.appendChild(city);
   }
 
   if (Number.isFinite(selected.metadata?.latitude) && Number.isFinite(selected.metadata?.longitude)) {
     const link = document.createElement('a');
+    link.className = 'meta-pill meta-link';
     link.href = `https://www.google.com/maps?q=${selected.metadata.latitude},${selected.metadata.longitude}`;
     link.target = '_blank';
     link.rel = 'noopener noreferrer';
@@ -1036,6 +1338,7 @@ async function renderViewer() {
     thumbButton.className = `thumbnail-button${entry.label === activeEntry.label ? ' active' : ''}`;
     thumbButton.type = 'button';
     thumbButton.dataset.label = entry.label;
+    thumbButton.setAttribute('aria-pressed', entry.label === activeEntry.label ? 'true' : 'false');
 
     const thumbOverlay = document.createElement('div');
     thumbOverlay.className = 'thumbnail-overlay';
@@ -1166,6 +1469,16 @@ function handleListClick(event) {
   void renderViewer();
 }
 
+function handleListKeydown(event) {
+  if (event.key !== 'Enter' && event.key !== ' ') return;
+
+  const card = event.target.closest('.event-card');
+  if (!card) return;
+
+  event.preventDefault();
+  card.click();
+}
+
 function handleFilterClick(event) {
   const button = event.target.closest('.filter-button');
   if (!button) return;
@@ -1174,6 +1487,135 @@ function handleFilterClick(event) {
   if (!filter || filter === state.filter) return;
 
   applyFilter(filter);
+}
+
+function isFileDrag(event) {
+  return Array.from(event.dataTransfer?.types ?? []).includes('Files');
+}
+
+function setDragOverlayVisible(isVisible) {
+  state.dragActive = isVisible;
+  elements.appShell?.classList.toggle('drag-active', isVisible);
+  if (!elements.dragOverlay) return;
+  elements.dragOverlay.hidden = !isVisible;
+  elements.dragOverlay.setAttribute('aria-hidden', `${!isVisible}`);
+}
+
+async function collectEntriesFromTransferHandle(handle, pathParts, entries) {
+  if (handle.kind === 'file') {
+    const file = await handle.getFile();
+    entries.push({
+      file,
+      relativePath: [...pathParts, file.name].join('/')
+    });
+    return;
+  }
+
+  for await (const [name, childHandle] of handle.entries()) {
+    if (childHandle.kind === 'directory') {
+      await collectEntriesFromTransferHandle(childHandle, [...pathParts, name], entries);
+      continue;
+    }
+
+    const file = await childHandle.getFile();
+    entries.push({
+      file,
+      relativePath: [...pathParts, name].join('/')
+    });
+  }
+}
+
+async function extractDroppedEntries(dataTransfer) {
+  const items = Array.from(dataTransfer?.items ?? []);
+  if (items.length && typeof items[0]?.getAsFileSystemHandle === 'function') {
+    const handles = [];
+
+    for (const item of items) {
+      if (item.kind !== 'file') continue;
+      try {
+        const handle = await item.getAsFileSystemHandle();
+        if (handle) {
+          handles.push(handle);
+        }
+      } catch (error) {
+        console.warn('Unable to inspect dropped item via File System Access handle', error);
+      }
+    }
+
+    if (handles.length) {
+      const entries = [];
+      for (const handle of handles) {
+        const rootPath = handle.kind === 'directory' ? [handle.name] : [];
+        await collectEntriesFromTransferHandle(handle, rootPath, entries);
+      }
+      if (entries.length) {
+        return entries;
+      }
+    }
+  }
+
+  return normalizeFileEntries(Array.from(dataTransfer?.files ?? []));
+}
+
+async function importEntries(entries, emptyMessage, successSuffix) {
+  const events = await loadTeslaCamFromEntries(entries);
+  updateStateWithEvents(events);
+
+  if (!events.length) {
+    setStatus(emptyMessage, 'warn');
+    return;
+  }
+
+  setStatus(summarizeImportedFootage(events, successSuffix), 'info');
+}
+
+function handleWindowDragEnter(event) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  dragDepth += 1;
+  setDragOverlayVisible(true);
+}
+
+function handleWindowDragOver(event) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  if (event.dataTransfer) {
+    event.dataTransfer.dropEffect = 'copy';
+  }
+  if (!state.dragActive) {
+    dragDepth = 1;
+    setDragOverlayVisible(true);
+  }
+}
+
+function handleWindowDragLeave(event) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) {
+    setDragOverlayVisible(false);
+  }
+}
+
+async function handleWindowDrop(event) {
+  if (!isFileDrag(event)) return;
+  event.preventDefault();
+  dragDepth = 0;
+  setDragOverlayVisible(false);
+  clearStatus();
+
+  try {
+    const entries = await extractDroppedEntries(event.dataTransfer);
+    if (!entries.length) {
+      setStatus('Drop a TeslaCam folder, MP4 clip, or matching event metadata to import footage.', 'warn');
+      return;
+    }
+
+    await importEntries(entries, 'No TeslaCam clips detected in the dropped files.', 'Imported from drag-and-drop.');
+  } catch (error) {
+    console.error(error);
+    setStatus('Unable to import the dropped footage. Check console for details.', 'error');
+  }
 }
 
 function clearStatus() {
@@ -1208,7 +1650,7 @@ function addGlobalHelpBanner() {
   const banner = document.createElement('div');
   banner.className = 'global-banner';
   banner.innerHTML = `
-    <p>Your browser does not expose the File System Access API. Use the Upload Folder option or switch to a Chromium-based desktop browser with the API enabled.</p>
+    <p>This browser does not expose the File System Access API. Use Upload Folder or drag the TeslaCam folder onto the page, or switch to a Chromium-based desktop browser for direct USB access.</p>
   `;
   app.insertBefore(banner, app.firstChild);
 }
@@ -1222,7 +1664,14 @@ document.addEventListener('DOMContentLoaded', () => {
   elements.manualButton?.addEventListener('click', () => elements.folderInput?.click());
   elements.folderInput?.addEventListener('change', handleFolderUpload);
   elements.eventList?.addEventListener('click', handleListClick);
+  elements.eventList?.addEventListener('keydown', handleListKeydown);
   elements.filters?.addEventListener('click', handleFilterClick);
+  window.addEventListener('dragenter', handleWindowDragEnter);
+  window.addEventListener('dragover', handleWindowDragOver);
+  window.addEventListener('dragleave', handleWindowDragLeave);
+  window.addEventListener('drop', (event) => {
+    void handleWindowDrop(event);
+  });
   renderSummary();
   renderEventList();
   void renderViewer();
