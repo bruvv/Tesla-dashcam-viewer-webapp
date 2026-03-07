@@ -742,6 +742,159 @@ button {
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.03);
 }
 
+.playback-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(320px, 0.95fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.telemetry-panel {
+  padding: 1.2rem;
+  border-radius: calc(var(--radius-lg) - 4px);
+  display: grid;
+  gap: 1rem;
+  min-height: 100%;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.028), rgba(255, 255, 255, 0.012)),
+    rgba(255, 255, 255, 0.02);
+}
+
+.telemetry-panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1rem;
+}
+
+.telemetry-heading {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.telemetry-panel h3,
+.telemetry-empty h4 {
+  margin: 0;
+  letter-spacing: -0.03em;
+}
+
+.telemetry-panel h3 {
+  font-size: 1.14rem;
+}
+
+.telemetry-copy,
+.telemetry-empty p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+
+.telemetry-actions,
+.telemetry-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+
+.telemetry-actions {
+  justify-content: flex-end;
+}
+
+.telemetry-status,
+.telemetry-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.1rem;
+  padding: 0.35rem 0.72rem;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.045);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.73rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.telemetry-status-loading {
+  border-color: rgba(247, 185, 85, 0.24);
+  background: rgba(247, 185, 85, 0.12);
+  color: #ffe0ad;
+}
+
+.telemetry-status-live {
+  border-color: rgba(51, 214, 159, 0.28);
+  background: rgba(51, 214, 159, 0.12);
+  color: #cbffeb;
+}
+
+.telemetry-status-empty {
+  color: rgba(245, 244, 242, 0.68);
+}
+
+.telemetry-status-error {
+  border-color: rgba(255, 108, 108, 0.28);
+  background: rgba(255, 108, 108, 0.12);
+  color: #ffd1d1;
+}
+
+.telemetry-pill-accent {
+  border-color: rgba(211, 31, 38, 0.3);
+  background: rgba(211, 31, 38, 0.16);
+  color: #fff1ee;
+}
+
+.telemetry-export-button {
+  min-height: 40px;
+  padding: 0.65rem 1rem;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.telemetry-card,
+.telemetry-empty {
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent 72%),
+    rgba(255, 255, 255, 0.025);
+}
+
+.telemetry-card {
+  padding: 0.9rem 0.95rem;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.telemetry-card-label {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.71rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: rgba(245, 244, 242, 0.52);
+}
+
+.telemetry-card-value {
+  font-size: 1.04rem;
+  letter-spacing: -0.02em;
+}
+
+.telemetry-card-hint {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.telemetry-empty {
+  padding: 1rem;
+  display: grid;
+  gap: 0.55rem;
+}
+
 .thumbnail-strip {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
@@ -881,7 +1034,8 @@ button {
   }
 
   .viewer-header,
-  .primary-heading {
+  .primary-heading,
+  .telemetry-panel-header {
     grid-template-columns: 1fr;
     display: grid;
   }
@@ -889,6 +1043,14 @@ button {
   .viewer-stats {
     width: fit-content;
     white-space: normal;
+  }
+
+  .playback-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .telemetry-actions {
+    justify-content: flex-start;
   }
 }
 
@@ -933,6 +1095,10 @@ button {
   }
 
   .empty-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .telemetry-grid {
     grid-template-columns: 1fr;
   }
 }

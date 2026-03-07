@@ -1,4 +1,5 @@
 import './style.css';
+import { buildTelemetryCsv, extractTelemetryFromFile, findTelemetrySampleAtTime } from './telemetry.js';
 
 const CAMERA_LABELS = {
   front: 'Front',
@@ -79,7 +80,9 @@ const elements = {
 };
 
 const activeObjectUrls = new Set();
+const telemetryCache = new WeakMap();
 let dragDepth = 0;
+let telemetryRequestSerial = 0;
 
 function initDom() {
   const app = document.getElementById('app');
@@ -1330,6 +1333,11 @@ async function renderViewer() {
 
   primaryView.append(primaryHeading, primaryVideo);
 
+  const telemetryPanel = createTelemetryPanel();
+  const playbackGrid = document.createElement('div');
+  playbackGrid.className = 'playback-grid';
+  playbackGrid.append(primaryView, telemetryPanel);
+
   const thumbnailStrip = document.createElement('div');
   thumbnailStrip.className = 'thumbnail-strip liquid-pane';
 
@@ -1361,7 +1369,7 @@ async function renderViewer() {
   if (meta.childElementCount) {
     viewer.appendChild(meta);
   }
-  viewer.append(segmentNav, primaryView, thumbnailStrip);
+  viewer.append(segmentNav, playbackGrid, thumbnailStrip);
 
   segmentNav.addEventListener('click', (event) => {
     const button = event.target.closest('[data-segment-id]');
@@ -1379,6 +1387,14 @@ async function renderViewer() {
     if (!label || label === state.selectedCameraByEvent.get(selected.id)) return;
     state.selectedCameraByEvent.set(selected.id, label);
     void renderViewer();
+  });
+
+  void hydrateTelemetryPanel({
+    event: selected,
+    segment: currentSegment,
+    activeEntry,
+    panel: telemetryPanel,
+    primaryVideo
   });
 }
 
@@ -1429,13 +1445,394 @@ async function loadCameraEntries(event, segment) {
       const file = await primaryClip.source.getFile();
       const url = URL.createObjectURL(file);
       activeObjectUrls.add(url);
-      entries.push({ label, url, timestamp: primaryClip.timestamp });
+      entries.push({ label, url, timestamp: primaryClip.timestamp, filename: primaryClip.filename, clip: primaryClip });
     } catch (error) {
       console.error(`Failed to load video for ${label}`, error);
     }
   }
 
   return entries;
+}
+
+function createTelemetryPanel() {
+  const panel = document.createElement('section');
+  panel.className = 'telemetry-panel liquid-pane';
+  return panel;
+}
+
+async function hydrateTelemetryPanel({ event, segment, activeEntry, panel, primaryVideo }) {
+  const requestId = ++telemetryRequestSerial;
+  renderTelemetryLoading(panel, activeEntry.label);
+
+  try {
+    const telemetry = await resolveSegmentTelemetry(event, segment, activeEntry.label);
+    if (requestId !== telemetryRequestSerial || !panel.isConnected) return;
+
+    if (!telemetry) {
+      renderTelemetryUnavailable(panel);
+      return;
+    }
+
+    mountTelemetryReadout(panel, telemetry, primaryVideo);
+  } catch (error) {
+    console.error('Failed to load telemetry data', error);
+    if (requestId !== telemetryRequestSerial || !panel.isConnected) return;
+    renderTelemetryError(panel);
+  }
+}
+
+async function resolveSegmentTelemetry(event, segment, preferredLabel) {
+  const candidates = getTelemetryCandidateClips(event, segment, preferredLabel);
+
+  for (const candidate of candidates) {
+    try {
+      const track = await getTelemetryTrackForClip(candidate.clip);
+      if (track.available) {
+        return {
+          track,
+          sourceLabel: candidate.label,
+          sourceFilename: candidate.clip.filename
+        };
+      }
+    } catch (error) {
+      console.warn(`Unable to inspect telemetry for ${candidate.clip.filename}`, error);
+    }
+  }
+
+  return null;
+}
+
+function getTelemetryCandidateClips(event, segment, preferredLabel) {
+  const orderedLabels = [];
+  const seen = new Set();
+
+  const appendLabel = (label) => {
+    if (!label || seen.has(label) || !segment.clips.has(label)) return;
+    seen.add(label);
+    orderedLabels.push(label);
+  };
+
+  appendLabel(preferredLabel);
+  appendLabel(event.metadata?.primaryCamera);
+
+  segment.cameraOrder.filter((label) => label.toLowerCase().includes('front')).forEach(appendLabel);
+  segment.cameraOrder.forEach(appendLabel);
+
+  return orderedLabels
+    .map((label) => ({ label, clip: segment.clips.get(label)?.[0] }))
+    .filter((entry) => entry.clip);
+}
+
+async function getTelemetryTrackForClip(clip) {
+  let pending = telemetryCache.get(clip.source);
+
+  if (!pending) {
+    pending = (async () => {
+      const file = await clip.source.getFile();
+      return extractTelemetryFromFile(file);
+    })().catch((error) => {
+      telemetryCache.delete(clip.source);
+      throw error;
+    });
+
+    telemetryCache.set(clip.source, pending);
+  }
+
+  return pending;
+}
+
+function renderTelemetryLoading(panel, activeLabel) {
+  panel.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'telemetry-panel-header';
+
+  const title = document.createElement('h3');
+  title.textContent = 'Vehicle telemetry';
+
+  const subtitle = document.createElement('p');
+  subtitle.className = 'telemetry-copy';
+  subtitle.textContent = `Inspecting the ${activeLabel} clip for Tesla SEI metadata.`;
+
+  const badge = document.createElement('span');
+  badge.className = 'telemetry-status telemetry-status-loading';
+  badge.textContent = 'Loading';
+
+  header.append(title, badge);
+  panel.append(header, subtitle);
+}
+
+function renderTelemetryUnavailable(panel) {
+  panel.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'telemetry-panel-header';
+
+  const title = document.createElement('h3');
+  title.textContent = 'Vehicle telemetry';
+
+  const badge = document.createElement('span');
+  badge.className = 'telemetry-status telemetry-status-empty';
+  badge.textContent = 'Unavailable';
+
+  header.append(title, badge);
+
+  const body = document.createElement('div');
+  body.className = 'telemetry-empty';
+
+  const heading = document.createElement('h4');
+  heading.textContent = 'No embedded SEI data was found in this segment';
+
+  const copy = document.createElement('p');
+  copy.textContent =
+    'Tesla only embeds SEI telemetry on supported dashcam clips from firmware 2025.44.25 or newer. Parked footage may still omit telemetry completely.';
+
+  body.append(heading, copy);
+  panel.append(header, body);
+}
+
+function renderTelemetryError(panel) {
+  panel.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'telemetry-panel-header';
+
+  const title = document.createElement('h3');
+  title.textContent = 'Vehicle telemetry';
+
+  const badge = document.createElement('span');
+  badge.className = 'telemetry-status telemetry-status-error';
+  badge.textContent = 'Error';
+
+  header.append(title, badge);
+
+  const copy = document.createElement('p');
+  copy.className = 'telemetry-copy';
+  copy.textContent = 'The clip loaded for playback, but the browser could not decode its SEI telemetry stream.';
+
+  panel.append(header, copy);
+}
+
+function mountTelemetryReadout(panel, telemetry, primaryVideo) {
+  const { track, sourceLabel, sourceFilename } = telemetry;
+  panel.innerHTML = '';
+
+  const header = document.createElement('div');
+  header.className = 'telemetry-panel-header';
+
+  const heading = document.createElement('div');
+  heading.className = 'telemetry-heading';
+
+  const title = document.createElement('h3');
+  title.textContent = 'Vehicle telemetry';
+
+  const subtitle = document.createElement('p');
+  subtitle.className = 'telemetry-copy';
+  subtitle.textContent = `Synced from the ${sourceLabel} clip with ${track.sampleCount} SEI sample${track.sampleCount === 1 ? '' : 's'}.`;
+
+  heading.append(title, subtitle);
+
+  const actions = document.createElement('div');
+  actions.className = 'telemetry-actions';
+
+  const status = document.createElement('span');
+  status.className = 'telemetry-status telemetry-status-live';
+  status.textContent = 'Available';
+
+  const exportButton = document.createElement('button');
+  exportButton.type = 'button';
+  exportButton.className = 'secondary-button telemetry-export-button';
+  exportButton.textContent = 'Export CSV';
+  exportButton.addEventListener('click', () => {
+    const csv = buildTelemetryCsv(track);
+    if (!csv) return;
+    downloadTextFile(csv, sourceFilename.replace(/\.mp4$/i, '') + '_sei.csv', 'text/csv');
+  });
+
+  actions.append(status, exportButton);
+  header.append(heading, actions);
+
+  const summary = document.createElement('div');
+  summary.className = 'telemetry-summary';
+
+  const sourcePill = document.createElement('span');
+  sourcePill.className = 'telemetry-pill';
+  sourcePill.textContent = `Source ${sourceLabel}`;
+
+  const durationPill = document.createElement('span');
+  durationPill.className = 'telemetry-pill';
+  durationPill.textContent = `Timeline ${formatTelemetryDuration(track.durationMs)}`;
+
+  const framePill = document.createElement('span');
+  framePill.className = 'telemetry-pill';
+  framePill.textContent = `${track.totalFrames} frame${track.totalFrames === 1 ? '' : 's'}`;
+
+  const sampleIndicator = document.createElement('span');
+  sampleIndicator.className = 'telemetry-pill telemetry-pill-accent';
+
+  summary.append(sourcePill, durationPill, framePill, sampleIndicator);
+
+  const grid = document.createElement('div');
+  grid.className = 'telemetry-grid';
+
+  const metrics = {
+    speed: createTelemetryMetricCard('Speed'),
+    steering: createTelemetryMetricCard('Steering'),
+    gear: createTelemetryMetricCard('Gear'),
+    autopilot: createTelemetryMetricCard('Driver aid'),
+    brake: createTelemetryMetricCard('Brake'),
+    blinkers: createTelemetryMetricCard('Signals'),
+    pedal: createTelemetryMetricCard('Pedal'),
+    heading: createTelemetryMetricCard('Heading'),
+    location: createTelemetryMetricCard('Location'),
+    acceleration: createTelemetryMetricCard('Acceleration')
+  };
+
+  Object.values(metrics).forEach((metric) => grid.appendChild(metric.element));
+  panel.append(header, summary, grid);
+
+  let lastFrameIndex = null;
+
+  const syncSample = () => {
+    if (!panel.isConnected) return;
+
+    const currentTime = Number.isFinite(primaryVideo.currentTime) ? primaryVideo.currentTime : 0;
+    const sample = findTelemetrySampleAtTime(track, currentTime) ?? track.samples[0];
+    if (!sample || sample.frameIndex === lastFrameIndex) return;
+
+    lastFrameIndex = sample.frameIndex;
+    sampleIndicator.textContent = formatTelemetryMoment(sample);
+
+    updateTelemetryMetric(
+      metrics.speed,
+      sample.vehicleSpeedKph === null ? 'No reading' : `${sample.vehicleSpeedKph.toFixed(1)} km/h`,
+      sample.vehicleSpeedMps === null ? 'Tesla SEI speed unavailable' : `${sample.vehicleSpeedMps.toFixed(2)} m/s`
+    );
+    updateTelemetryMetric(
+      metrics.steering,
+      sample.steeringWheelAngle === null ? 'No reading' : `${sample.steeringWheelAngle.toFixed(1)} deg`,
+      'Steering wheel angle'
+    );
+    updateTelemetryMetric(
+      metrics.gear,
+      sample.gearState ?? 'Unknown',
+      sample.frameSeqNo === null ? 'Frame sequence unavailable' : `Frame ${sample.frameSeqNo}`
+    );
+    updateTelemetryMetric(
+      metrics.autopilot,
+      sample.autopilotState ?? 'Unknown',
+      describeAutopilotState(sample.autopilotState)
+    );
+    updateTelemetryMetric(
+      metrics.brake,
+      sample.brakeApplied ? 'Applied' : 'Released',
+      sample.brakeApplied ? 'Brake pedal active' : 'Brake pedal not active'
+    );
+    updateTelemetryMetric(
+      metrics.blinkers,
+      formatBlinkerState(sample),
+      'Turn-signal state'
+    );
+    updateTelemetryMetric(
+      metrics.pedal,
+      sample.acceleratorPedalPosition === null ? 'No reading' : `${sample.acceleratorPedalPosition.toFixed(1)}%`,
+      'Accelerator pedal position'
+    );
+    updateTelemetryMetric(
+      metrics.heading,
+      sample.headingDeg === null ? 'No reading' : `${sample.headingDeg.toFixed(1)} deg`,
+      'Vehicle heading'
+    );
+    updateTelemetryMetric(
+      metrics.location,
+      sample.hasGpsFix ? formatCoordinates(sample.latitudeDeg, sample.longitudeDeg) : 'No GPS fix',
+      sample.hasGpsFix ? 'Embedded GPS coordinates' : 'Location not embedded in this sample'
+    );
+    updateTelemetryMetric(
+      metrics.acceleration,
+      sample.accelerationMagnitude === null ? 'No reading' : `${sample.accelerationMagnitude.toFixed(3)} m/s^2`,
+      formatAccelerationAxes(sample)
+    );
+  };
+
+  primaryVideo.addEventListener('loadedmetadata', syncSample);
+  primaryVideo.addEventListener('timeupdate', syncSample);
+  primaryVideo.addEventListener('seeked', syncSample);
+  primaryVideo.addEventListener('play', syncSample);
+  syncSample();
+}
+
+function createTelemetryMetricCard(label) {
+  const element = document.createElement('article');
+  element.className = 'telemetry-card';
+
+  const labelEl = document.createElement('span');
+  labelEl.className = 'telemetry-card-label';
+  labelEl.textContent = label;
+
+  const valueEl = document.createElement('strong');
+  valueEl.className = 'telemetry-card-value';
+  valueEl.textContent = 'Waiting...';
+
+  const hintEl = document.createElement('span');
+  hintEl.className = 'telemetry-card-hint';
+  hintEl.textContent = '';
+
+  element.append(labelEl, valueEl, hintEl);
+
+  return { element, valueEl, hintEl };
+}
+
+function updateTelemetryMetric(metric, value, hint) {
+  metric.valueEl.textContent = value;
+  metric.hintEl.textContent = hint;
+}
+
+function formatTelemetryDuration(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return 'Unknown';
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
+function formatTelemetryMoment(sample) {
+  return `Live sample ${sample.timeSeconds.toFixed(2)}s`;
+}
+
+function formatBlinkerState(sample) {
+  if (sample.blinkerOnLeft && sample.blinkerOnRight) return 'Both on';
+  if (sample.blinkerOnLeft) return 'Left';
+  if (sample.blinkerOnRight) return 'Right';
+  return 'Off';
+}
+
+function formatAccelerationAxes(sample) {
+  const parts = [
+    sample.linearAccelerationMps2X,
+    sample.linearAccelerationMps2Y,
+    sample.linearAccelerationMps2Z
+  ].map((value) => (value === null ? '-' : value.toFixed(2)));
+  return `X ${parts[0]} / Y ${parts[1]} / Z ${parts[2]}`;
+}
+
+function describeAutopilotState(state) {
+  if (state === 'Self-Driving') return 'Autonomy stack active';
+  if (state === 'Autosteer') return 'Lane centering active';
+  if (state === 'TACC') return 'Cruise control active';
+  return 'Manual control';
+}
+
+function downloadTextFile(text, filename, mimeType) {
+  const blob = new Blob([text], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 function formatReason(reason) {

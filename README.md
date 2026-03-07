@@ -1,7 +1,7 @@
 # TeslaCam Viewer
 
 [![Build and Deploy](https://github.com/bruvv/Tesla-dashcam-viewer-webapp/actions/workflows/deploy.yml/badge.svg)](https://github.com/bruvv/Tesla-dashcam-viewer-webapp/actions/workflows/deploy.yml)
-TeslaCam Viewer is a progressive web app for exploring Tesla dashcam and Sentry footage directly from the USB drive. It groups recordings by event, surfaces metadata such as trigger reason and location, and provides a Tesla-style multi-camera player with a primary spotlight view. What better then having a screenshot?
+TeslaCam Viewer is a progressive web app for exploring Tesla dashcam and Sentry footage directly from the USB drive. It groups recordings by event, surfaces metadata such as trigger reason and location, and provides a Tesla-style multi-camera player with a primary spotlight view. It now also inspects Tesla's embedded SEI telemetry stream when clips include it, so you can review speed, steering, gear, autopilot state, GPS, and acceleration alongside playback. What better then having a screenshot?
 <img width="1720" height="949" alt="image" src="https://github.com/user-attachments/assets/151bf4e3-1b7f-4ac0-b7cb-f4a850e71981" />
 
 You can find the website here: <https://bruvv.github.io/Tesla-dashcam-viewer-webapp/> or run it local
@@ -64,15 +64,23 @@ Every event retains all of its TeslaCam video files per camera. The viewer clust
 
 The app recognises the standard `TeslaCam/{RecentClips,SavedClips,SentryClips}/<timestamp>` structure, MP4 footage, and optional `event.json` metadata files. Metadata fields (`timestamp`, `city`, `est_lat`, `est_lon`, `reason`, `camera`) populate the event list and viewer; map links open in Google Maps when coordinates are present.
 
+When a selected segment contains Tesla SEI metadata, the viewer decodes it locally in the browser and syncs a telemetry panel to the active clip. CSV export is available for the decoded SEI track. If no telemetry is found, playback still works normally.
+
 ## Viewer Features
 
 - Smart highlights and timeline chips to scrub every captured segment per event while surfacing the most relevant clips first.
 - Event filters for Recent, Saved, and Sentry clips with summary counters.
 - Liquid Glass-inspired layout: a large primary video pane with a reflective multi-camera rail styled after the latest Apple design language.
 - Automatic camera selection from metadata (camera index) with manual overrides per event.
+- Embedded SEI telemetry decoding for supported Tesla clips, with live speed, steering, gear, autopilot, brake, blinker, GPS, and acceleration readouts next to playback.
+- CSV export for the currently decoded telemetry stream.
 - Reason descriptions for known Sentry and manual triggers, plus city readouts when available.
 - Installable PWA with offline caching of the UI shell.
 
 ## Browser Notes
 
 Safari and Firefox currently lack the File System Access API. They can still use the upload fallback, but live drive browsing remains unsupported. For long sessions, keep the site open while the USB drive stays connected to avoid repeating permission prompts.
+
+## Telemetry Notes
+
+Tesla's public Dashcam tooling notes that embedded SEI metadata is only present on supported clips recorded on firmware `2025.44.25` or later, typically on HW3 or newer vehicles. Parked footage may omit telemetry entirely. The viewer checks for SEI data opportunistically and falls back to standard video playback when none is present.
